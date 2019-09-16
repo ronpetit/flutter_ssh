@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.BufferedInputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,9 +40,13 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 import io.flutter.plugin.common.PluginRegistry.Registrar;
 
-/** SshPlugin */
+/**
+ * SshPlugin
+ */
 public class SshPlugin implements MethodCallHandler, StreamHandler {
-  /** Plugin registration. */
+  /**
+   * Plugin registration.
+   */
   public static void registerWith(Registrar registrar) {
     final MethodChannel channel = new MethodChannel(registrar.messenger(), "ssh");
     final EventChannel eventChannel = new EventChannel(registrar.messenger(), "shell_sftp");
@@ -63,35 +68,35 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
     @Override
     public void success(final Object result) {
       handler.post(
-          new Runnable() {
-            @Override
-            public void run() {
-              methodResult.success(result);
-            }
-          });
+              new Runnable() {
+                @Override
+                public void run() {
+                  methodResult.success(result);
+                }
+              });
     }
 
     @Override
     public void error(
-        final String errorCode, final String errorMessage, final Object errorDetails) {
+            final String errorCode, final String errorMessage, final Object errorDetails) {
       handler.post(
-          new Runnable() {
-            @Override
-            public void run() {
-              methodResult.error(errorCode, errorMessage, errorDetails);
-            }
-          });
+              new Runnable() {
+                @Override
+                public void run() {
+                  methodResult.error(errorCode, errorMessage, errorDetails);
+                }
+              });
     }
 
     @Override
     public void notImplemented() {
       handler.post(
-          new Runnable() {
-            @Override
-            public void run() {
-              methodResult.notImplemented();
-            }
-          });
+              new Runnable() {
+                @Override
+                public void run() {
+                  methodResult.notImplemented();
+                }
+              });
     }
   }
 
@@ -102,8 +107,6 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
       connectToHost((HashMap) call.arguments, result);
     } else if (call.method.equals("execute")) {
       execute((HashMap) call.arguments, result);
-    } else if (call.method.equals("portForwardL")) {
-      portForwardL((HashMap) call.arguments, result);
     } else if (call.method.equals("startShell")) {
       startShell((HashMap) call.arguments, result);
     } else if (call.method.equals("writeToShell")) {
@@ -139,6 +142,46 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
     }
   }
 
+  private static class MainThreadEventSink implements EventChannel.EventSink {
+    private EventChannel.EventSink eventSink;
+    private Handler handler;
+
+    MainThreadEventSink(EventChannel.EventSink eventSink) {
+      this.eventSink = eventSink;
+      handler = new Handler(Looper.getMainLooper());
+    }
+
+    @Override
+    public void success(final Object o) {
+      handler.post(new Runnable() {
+        @Override
+        public void run() {
+          eventSink.success(o);
+        }
+      });
+    }
+
+    @Override
+    public void error(final String s, final String s1, final Object o) {
+      handler.post(new Runnable() {
+        @Override
+        public void run() {
+          eventSink.error(s, s1, o);
+        }
+      });
+    }
+
+    @Override
+    public void endOfStream() {
+      handler.post(new Runnable() {
+        @Override
+        public void run() {
+          eventSink.endOfStream();
+        }
+      });
+    }
+  }
+
   private class SSHClient {
     Session _session;
     String _key;
@@ -164,7 +207,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
 
   @Override
   public void onListen(Object arguments, EventSink events) {
-    this.eventSink = events;
+    this.eventSink = new MainThreadEventSink(events);
   }
 
   @Override
@@ -173,12 +216,12 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void connectToHost(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           String key = args.get("id").toString();
           String host = args.get("host").toString();
-          int port = (int)args.get("port");
+          int port = (int) args.get("port");
           String username = args.get("username").toString();
 
           JSch jsch = new JSch();
@@ -186,9 +229,9 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
           String password = "";
           if (args.get("passwordOrKey").getClass() == args.getClass()) {
             HashMap keyPairs = (HashMap) args.get("passwordOrKey");
-            byte[] privateKey = keyPairs.containsKey("privateKey") ? keyPairs.get("privateKey").toString().getBytes(): null;
-            byte[] publicKey = keyPairs.containsKey("publicKey") ? keyPairs.get("publicKey").toString().getBytes(): null;
-            byte[] passphrase = keyPairs.containsKey("passphrase") ? keyPairs.get("passphrase").toString().getBytes(): null;
+            byte[] privateKey = keyPairs.containsKey("privateKey") ? keyPairs.get("privateKey").toString().getBytes() : null;
+            byte[] publicKey = keyPairs.containsKey("publicKey") ? keyPairs.get("publicKey").toString().getBytes() : null;
+            byte[] passphrase = keyPairs.containsKey("passphrase") ? keyPairs.get("passphrase").toString().getBytes() : null;
             jsch.addIdentity("default", privateKey, publicKey, passphrase);
 
           } else {
@@ -250,32 +293,9 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
       }
     }).start();
   }
-  
-  private void portForwardL(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
-      public void run() {
-        try {
-          SSHClient client = getClient(args.get("id").toString(), result);
-          if (client == null)
-            return;
-          
-          Session session = client._session;
-          int rport = Integer.parseInt(args.get("rport").toString());
-          int lport = Integer.parseInt(args.get("lport").toString());
-          String rhost = args.get("rhost").toString();
-          int assinged_port=session.setPortForwardingL(lport, rhost, rport);
-          
-          result.success(Integer.toString(assinged_port));
-        } catch (JSchException error) {
-          Log.e(LOGTAG, "Error connecting portforwardL:" + error.getMessage());
-          result.error("portforwardL_failure", error.getMessage(), null);
-        }
-      }
-    }).start();
-  }
 
   private void startShell(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           String key = args.get("id").toString();
@@ -285,7 +305,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
 
           Session session = client._session;
           Channel channel = session.openChannel("shell");
-          ((ChannelShell)channel).setPtyType(args.get("ptyType").toString());
+          ((ChannelShell) channel).setPtyType(args.get("ptyType").toString());
           channel.connect();
 
           InputStream in = channel.getInputStream();
@@ -313,7 +333,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void writeToShell(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = getClient(args.get("id").toString(), result);
@@ -332,7 +352,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void closeShell(final HashMap args) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -360,7 +380,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void connectSFTP(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = getClient(args.get("id").toString(), result);
@@ -380,7 +400,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpLs(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -389,7 +409,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
           Vector<LsEntry> files = channelSftp.ls(args.get("path").toString());
           List<Map<String, Object>> response = new ArrayList<>();
 
-          for (LsEntry file: files) {
+          for (LsEntry file : files) {
             String filename = file.getFilename();
             if (filename.trim().equals(".") || filename.trim().equals(".."))
               continue;
@@ -419,7 +439,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpRename(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -435,7 +455,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpMkdir(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -451,7 +471,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpRm(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -467,7 +487,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpRmdir(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -483,7 +503,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpDownload(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -497,6 +517,8 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
           else
             result.success("download_canceled");
         } catch (SftpException error) {
+          Log.e(LOGTAG, error.toString());
+          Log.e(LOGTAG, error.getCause().toString());
           Log.e(LOGTAG, "Failed to download " + args.get("path").toString());
           result.error("download_failure", error.getMessage(), null);
         }
@@ -505,7 +527,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void sftpUpload(final HashMap args, final Result result) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         try {
           SSHClient client = clientPool.get(args.get("id"));
@@ -514,7 +536,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
           String path = args.get("path").toString();
           String toPath = args.get("toPath").toString();
           channelSftp.put(path, toPath + '/' + (new File(path)).getName(),
-              new progressMonitor(args.get("id").toString(), "UploadProgress"), ChannelSftp.OVERWRITE);
+                  new progressMonitor(args.get("id").toString(), "UploadProgress"), ChannelSftp.OVERWRITE);
           if (client._uploadContinue == true)
             result.success("upload_success");
           else
@@ -538,7 +560,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
   }
 
   private void disconnectSFTP(final HashMap args) {
-    new Thread(new Runnable()  {
+    new Thread(new Runnable() {
       public void run() {
         SSHClient client = clientPool.get(args.get("id"));
         if (client._sftpSession != null) {
@@ -583,7 +605,7 @@ public class SshPlugin implements MethodCallHandler, StreamHandler {
       SSHClient client = clientPool.get(this.key);
       this.count += arg0;
       long newPerc = this.count * 100 / max;
-      if(newPerc % 5 == 0 && newPerc > this.completedPerc) {
+      if (newPerc % 5 == 0 && newPerc > this.completedPerc) {
         this.completedPerc = newPerc;
         Map<String, Object> map = new HashMap<>();
         map.put("name", this.name);
